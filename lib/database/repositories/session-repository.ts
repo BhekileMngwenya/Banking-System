@@ -1,87 +1,74 @@
-// Session repository for database operations
+// Session repository for PostgreSQL database operations
 import { db } from "../connection"
 import type { Session } from "../models"
-import { SecureCrypto } from "../../crypto"
 import { v4 as uuidv4 } from "uuid"
 
 export class SessionRepository {
   // Create a new session
-  static async create(userId: string, ipAddress?: string, userAgent?: string): Promise<Session> {
+  static async create(
+    userId: string,
+    sessionToken: string,
+    expiresAt: Date,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<Session> {
     const sessionId = uuidv4()
-    const sessionToken = SecureCrypto.generateSecureToken()
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
 
     const sql = `
-      INSERT INTO sessions (id, user_id, session_token, ip_address, user_agent, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, user_id, session_token, expires_at, ip_address, user_agent)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, user_id as "userId", session_token as "sessionToken", 
+                expires_at as "expiresAt", ip_address as "ipAddress", 
+                user_agent as "userAgent", created_at as "createdAt"
     `
 
-    await db.query(sql, [sessionId, userId, sessionToken, ipAddress || null, userAgent || null, expiresAt])
+    const sessions = await db.query<Session>(sql, [
+      sessionId,
+      userId,
+      sessionToken,
+      expiresAt,
+      ipAddress || null,
+      userAgent || null,
+    ])
 
-    const session = await this.findById(sessionId)
-    if (!session) {
+    if (sessions.length === 0) {
       throw new Error("Failed to create session")
     }
 
-    return session
-  }
-
-  // Find session by ID
-  static async findById(id: string): Promise<Session | null> {
-    const sql = `
-      SELECT id, user_id as userId, session_token as sessionToken,
-             ip_address as ipAddress, user_agent as userAgent,
-             expires_at as expiresAt, created_at as createdAt
-      FROM sessions WHERE id = ?
-    `
-
-    return await db.queryOne<Session>(sql, [id])
+    return sessions[0]
   }
 
   // Find session by token
   static async findByToken(token: string): Promise<Session | null> {
     const sql = `
-      SELECT id, user_id as userId, session_token as sessionToken,
-             ip_address as ipAddress, user_agent as userAgent,
-             expires_at as expiresAt, created_at as createdAt
-      FROM sessions WHERE session_token = ?
+      SELECT id, user_id as "userId", session_token as "sessionToken", 
+             expires_at as "expiresAt", ip_address as "ipAddress", 
+             user_agent as "userAgent", created_at as "createdAt"
+      FROM sessions 
+      WHERE session_token = $1
     `
 
     return await db.queryOne<Session>(sql, [token])
   }
 
   // Delete session
-  static async delete(id: string): Promise<boolean> {
-    const sql = "DELETE FROM sessions WHERE id = ?"
-    const result = await db.query(sql, [id])
-    return Array.isArray(result) && result.length > 0
+  static async delete(token: string): Promise<boolean> {
+    const sql = "DELETE FROM sessions WHERE session_token = $1"
+    const result = await db.query(sql, [token])
+    return result.length > 0
+  }
+
+  // Delete all sessions for a user
+  static async deleteAllForUser(userId: string): Promise<boolean> {
+    const sql = "DELETE FROM sessions WHERE user_id = $1"
+    const result = await db.query(sql, [userId])
+    return result.length > 0
   }
 
   // Delete expired sessions
   static async deleteExpired(): Promise<number> {
-    const sql = "DELETE FROM sessions WHERE expires_at < NOW()"
+    const sql = "DELETE FROM sessions WHERE expires_at < NOW() RETURNING id"
     const result = await db.query(sql)
-    return Array.isArray(result) ? result.length : 0
-  }
-
-  // Delete all sessions for a user
-  static async deleteByUserId(userId: string): Promise<number> {
-    const sql = "DELETE FROM sessions WHERE user_id = ?"
-    const result = await db.query(sql, [userId])
-    return Array.isArray(result) ? result.length : 0
-  }
-
-  // Get active sessions for a user
-  static async getByUserId(userId: string): Promise<Session[]> {
-    const sql = `
-      SELECT id, user_id as userId, session_token as sessionToken,
-             ip_address as ipAddress, user_agent as userAgent,
-             expires_at as expiresAt, created_at as createdAt
-      FROM sessions 
-      WHERE user_id = ? AND expires_at > NOW()
-      ORDER BY created_at DESC
-    `
-
-    return await db.query<Session>(sql, [userId])
+    return result.length
   }
 }

@@ -1,12 +1,12 @@
-// Authentication service with database integration
+// Authentication service
 import { UserRepository } from "../database/repositories/user-repository"
 import { SessionRepository } from "../database/repositories/session-repository"
 import { SecureCrypto } from "../crypto"
-import type { AuthResult, DatabaseUser } from "../database/models"
-import { validateInput, SecurityPatterns } from "../security"
+import type { DatabaseUser, AuthResult } from "../database/models"
+import { v4 as uuidv4 } from "uuid"
 
 export class AuthService {
-  // Authenticate user
+  // Authenticate a user
   static async authenticate(
     email: string,
     password: string,
@@ -14,40 +14,47 @@ export class AuthService {
     userAgent?: string,
   ): Promise<AuthResult> {
     try {
-      // Validate input
-      if (!validateInput(email, SecurityPatterns.email)) {
-        return { success: false, error: "Invalid email format" }
-      }
-
-      // Find user with password
+      // Find user by email
       const user = await UserRepository.findByEmailWithPassword(email)
-      if (!user) {
-        return { success: false, error: "Invalid credentials" }
-      }
 
-      // Check if account is locked
-      if (user.lockedUntil && new Date() < user.lockedUntil) {
-        await UserRepository.logLoginAttempt(user.id, false, ipAddress, userAgent, "Account locked")
-        return { success: false, error: "Account temporarily locked" }
+      if (!user) {
+        return {
+          success: false,
+          error: "Invalid email or password",
+        }
       }
 
       // Check if account is active
       if (!user.isActive) {
-        await UserRepository.logLoginAttempt(user.id, false, ipAddress, userAgent, "Account deactivated")
-        return { success: false, error: "Account is deactivated" }
+        await UserRepository.logLoginAttempt(user.id, false, ipAddress, userAgent, "Account is inactive")
+        return {
+          success: false,
+          error: "Account is inactive. Please contact support.",
+        }
+      }
+
+      // Check if account is locked
+      if (user.lockedUntil && user.lockedUntil > new Date()) {
+        await UserRepository.logLoginAttempt(user.id, false, ipAddress, userAgent, "Account is locked")
+        return {
+          success: false,
+          error: "Account is temporarily locked. Please try again later.",
+        }
       }
 
       // Verify password
-      const isValidPassword = await SecureCrypto.verifyPassword(password, user.passwordHash, user.passwordSalt)
+      const isPasswordValid = await SecureCrypto.verifyPassword(password, user.passwordHash, user.passwordSalt)
 
-      if (!isValidPassword) {
-        // Increment failed attempts
+      if (!isPasswordValid) {
+        // Increment failed login attempts
+        const maxAttempts = 5 // Should come from settings
         const newAttempts = user.failedLoginAttempts + 1
-        let lockedUntil: Date | undefined
+        let lockedUntil = null
 
-        // Lock account after 5 failed attempts
-        if (newAttempts >= 5) {
-          lockedUntil = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+        // Lock account if max attempts reached
+        if (newAttempts >= maxAttempts) {
+          const lockoutMinutes = 15 // Should come from settings
+          lockedUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000)
         }
 
         await UserRepository.updateLoginAttempts(user.id, newAttempts, lockedUntil)
@@ -55,60 +62,59 @@ export class AuthService {
 
         return {
           success: false,
-          error: `Invalid credentials. ${5 - newAttempts} attempts remaining.`,
+          error: "Invalid email or password",
         }
       }
 
-      // Successful login
+      // Update last login and reset failed attempts
       await UserRepository.updateLastLogin(user.id)
       await UserRepository.logLoginAttempt(user.id, true, ipAddress, userAgent)
 
+      // Generate JWT token
+      const token = await this.generateToken(user.id)
+
       // Create session
-      const session = await SessionRepository.create(user.id, ipAddress, userAgent)
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+      await SessionRepository.create(user.id, token, expiresAt, ipAddress, userAgent)
 
-      // Generate token
-      const token = SecureCrypto.generateJWT(
-        {
-          userId: user.id,
-          sessionId: session.id,
-          role: user.role,
-          exp: session.expiresAt.getTime(),
-        },
-        process.env.JWT_SECRET || "fallback-secret",
-      )
-
-      // Return user without sensitive data
+      // Return user data without sensitive information
       const { passwordHash, passwordSalt, ...safeUser } = user
 
       return {
         success: true,
-        user: safeUser as DatabaseUser,
+        user: safeUser,
         token,
       }
     } catch (error) {
       console.error("Authentication error:", error)
-      return { success: false, error: "Internal server error" }
+      return {
+        success: false,
+        error: "An error occurred during authentication",
+      }
     }
   }
 
   // Validate session token
   static async validateSession(token: string): Promise<DatabaseUser | null> {
     try {
-      const payload = SecureCrypto.verifyJWT(token, process.env.JWT_SECRET || "fallback-secret")
+      // Find session by token
+      const session = await SessionRepository.findByToken(token)
 
-      if (!payload || payload.exp < Date.now()) {
+      if (!session) {
         return null
       }
 
-      // Check if session exists and is valid
-      const session = await SessionRepository.findById(payload.sessionId)
-      if (!session || session.expiresAt < new Date()) {
+      // Check if session is expired
+      if (session.expiresAt < new Date()) {
+        await SessionRepository.delete(token)
         return null
       }
 
-      // Get user
-      const user = await UserRepository.findById(payload.userId)
+      // Get user data
+      const user = await UserRepository.findById(session.userId)
+
       if (!user || !user.isActive) {
+        await SessionRepository.delete(token)
         return null
       }
 
@@ -119,54 +125,32 @@ export class AuthService {
     }
   }
 
-  // Logout user
-  static async logout(sessionId: string): Promise<void> {
+  // Logout (invalidate session)
+  static async logout(token: string): Promise<boolean> {
     try {
-      await SessionRepository.delete(sessionId)
+      return await SessionRepository.delete(token)
     } catch (error) {
       console.error("Logout error:", error)
+      return false
     }
   }
 
-  // Create new user
-  static async createUser(userData: {
-    email: string
-    firstName: string
-    lastName: string
-    password: string
-    role?: "admin" | "customer"
-    initialBalance?: number
-  }): Promise<{ success: boolean; user?: DatabaseUser; error?: string }> {
-    try {
-      // Validate inputs
-      if (!validateInput(userData.email, SecurityPatterns.email)) {
-        return { success: false, error: "Invalid email format" }
-      }
+  // Generate JWT token
+  private static async generateToken(userId: string): Promise<string> {
+    const jwtSecret = process.env.JWT_SECRET || "default-jwt-secret-key-for-development"
 
-      if (!validateInput(userData.firstName, SecurityPatterns.name)) {
-        return { success: false, error: "Invalid first name" }
-      }
+    // In a real implementation, use a proper JWT library
+    // For simplicity, we're creating a simple token here
+    const tokenId = uuidv4()
+    const expiresAt = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
 
-      if (!validateInput(userData.lastName, SecurityPatterns.name)) {
-        return { success: false, error: "Invalid last name" }
-      }
-
-      if (!validateInput(userData.password, SecurityPatterns.password)) {
-        return { success: false, error: "Password does not meet security requirements" }
-      }
-
-      // Check if email already exists
-      if (await UserRepository.emailExists(userData.email)) {
-        return { success: false, error: "User with this email already exists" }
-      }
-
-      // Create user
-      const user = await UserRepository.create(userData)
-
-      return { success: true, user }
-    } catch (error) {
-      console.error("User creation error:", error)
-      return { success: false, error: "Failed to create user" }
+    const tokenData = {
+      id: tokenId,
+      userId,
+      exp: expiresAt,
     }
+
+    // In production, use a proper JWT library
+    return Buffer.from(JSON.stringify(tokenData)).toString("base64")
   }
 }

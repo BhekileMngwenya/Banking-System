@@ -1,4 +1,4 @@
--- Seed initial data for the banking portal
+-- Seed initial data for the banking portal (PostgreSQL)
 
 -- Insert default exchange rates
 INSERT INTO exchange_rates (currency_from, currency_to, rate) VALUES
@@ -6,9 +6,9 @@ INSERT INTO exchange_rates (currency_from, currency_to, rate) VALUES
 ('EUR', 'ZAR', 20.45),
 ('GBP', 'ZAR', 23.85),
 ('ZAR', 'ZAR', 1.00)
-ON DUPLICATE KEY UPDATE 
-rate = VALUES(rate),
-updated_at = CURRENT_TIMESTAMP;
+ON CONFLICT (currency_from, currency_to) DO UPDATE 
+SET rate = EXCLUDED.rate,
+    updated_at = CURRENT_TIMESTAMP;
 
 -- Insert system settings
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
@@ -20,9 +20,9 @@ INSERT INTO system_settings (setting_key, setting_value, description) VALUES
 ('min_password_length', '8', 'Minimum password length'),
 ('require_2fa', 'false', 'Require two-factor authentication'),
 ('maintenance_mode', 'false', 'System maintenance mode')
-ON DUPLICATE KEY UPDATE 
-setting_value = VALUES(setting_value),
-updated_at = CURRENT_TIMESTAMP;
+ON CONFLICT (setting_key) DO UPDATE 
+SET setting_value = EXCLUDED.setting_value,
+    updated_at = CURRENT_TIMESTAMP;
 
 -- Create default admin user (password: AdminPass123!)
 -- Note: In production, this should be done securely
@@ -48,8 +48,8 @@ INSERT INTO users (
     '6200000001',
     0.00,
     TRUE
-) ON DUPLICATE KEY UPDATE
-email = VALUES(email);
+) ON CONFLICT (email) DO UPDATE
+SET email = EXCLUDED.email;
 
 -- Create sample customer (password: Customer123!)
 INSERT INTO users (
@@ -74,8 +74,8 @@ INSERT INTO users (
     '6200000002',
     25000.00,
     TRUE
-) ON DUPLICATE KEY UPDATE
-email = VALUES(email);
+) ON CONFLICT (email) DO UPDATE
+SET email = EXCLUDED.email;
 
 -- Create initial deposit transaction for sample customer
 INSERT INTO transactions (
@@ -106,7 +106,5 @@ INSERT INTO transactions (
     'deposit',
     0.00,
     CURRENT_TIMESTAMP
-) ON DUPLICATE KEY UPDATE
-reference = VALUES(reference);
-
-COMMIT;
+) ON CONFLICT (id) DO UPDATE
+SET reference = EXCLUDED.reference;

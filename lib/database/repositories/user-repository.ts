@@ -1,4 +1,4 @@
-// User repository for database operations
+// User repository for PostgreSQL database operations
 import { db } from "../connection"
 import type { User, DatabaseUser, CreateUserData, UpdateUserData, LoginHistory } from "../models"
 import { SecureCrypto } from "../../crypto"
@@ -22,7 +22,8 @@ export class UserRepository {
       INSERT INTO users (
         id, email, password_hash, password_salt, first_name, last_name, 
         role, account_number, balance, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id
     `
 
     await db.query(sql, [
@@ -49,12 +50,12 @@ export class UserRepository {
   // Find user by ID
   static async findById(id: string): Promise<DatabaseUser | null> {
     const sql = `
-      SELECT id, email, first_name as firstName, last_name as lastName, 
-             role, account_number as accountNumber, balance, is_active as isActive,
-             two_factor_enabled as twoFactorEnabled, failed_login_attempts as failedLoginAttempts,
-             locked_until as lockedUntil, last_login as lastLogin, 
-             created_at as createdAt, updated_at as updatedAt
-      FROM users WHERE id = ?
+      SELECT id, email, first_name as "firstName", last_name as "lastName", 
+             role, account_number as "accountNumber", balance, is_active as "isActive",
+             two_factor_enabled as "twoFactorEnabled", failed_login_attempts as "failedLoginAttempts",
+             locked_until as "lockedUntil", last_login as "lastLogin", 
+             created_at as "createdAt", updated_at as "updatedAt"
+      FROM users WHERE id = $1
     `
 
     return await db.queryOne<DatabaseUser>(sql, [id])
@@ -63,13 +64,13 @@ export class UserRepository {
   // Find user by email (with password for authentication)
   static async findByEmailWithPassword(email: string): Promise<User | null> {
     const sql = `
-      SELECT id, email, password_hash as passwordHash, password_salt as passwordSalt,
-             first_name as firstName, last_name as lastName, role, 
-             account_number as accountNumber, balance, is_active as isActive,
-             two_factor_enabled as twoFactorEnabled, failed_login_attempts as failedLoginAttempts,
-             locked_until as lockedUntil, last_login as lastLogin,
-             created_at as createdAt, updated_at as updatedAt
-      FROM users WHERE email = ?
+      SELECT id, email, password_hash as "passwordHash", password_salt as "passwordSalt",
+             first_name as "firstName", last_name as "lastName", role, 
+             account_number as "accountNumber", balance, is_active as "isActive",
+             two_factor_enabled as "twoFactorEnabled", failed_login_attempts as "failedLoginAttempts",
+             locked_until as "lockedUntil", last_login as "lastLogin",
+             created_at as "createdAt", updated_at as "updatedAt"
+      FROM users WHERE email = $1
     `
 
     return await db.queryOne<User>(sql, [email])
@@ -78,12 +79,12 @@ export class UserRepository {
   // Find user by email
   static async findByEmail(email: string): Promise<DatabaseUser | null> {
     const sql = `
-      SELECT id, email, first_name as firstName, last_name as lastName, 
-             role, account_number as accountNumber, balance, is_active as isActive,
-             two_factor_enabled as twoFactorEnabled, failed_login_attempts as failedLoginAttempts,
-             locked_until as lockedUntil, last_login as lastLogin,
-             created_at as createdAt, updated_at as updatedAt
-      FROM users WHERE email = ?
+      SELECT id, email, first_name as "firstName", last_name as "lastName", 
+             role, account_number as "accountNumber", balance, is_active as "isActive",
+             two_factor_enabled as "twoFactorEnabled", failed_login_attempts as "failedLoginAttempts",
+             locked_until as "lockedUntil", last_login as "lastLogin",
+             created_at as "createdAt", updated_at as "updatedAt"
+      FROM users WHERE email = $1
     `
 
     return await db.queryOne<DatabaseUser>(sql, [email])
@@ -92,12 +93,12 @@ export class UserRepository {
   // Find user by account number
   static async findByAccountNumber(accountNumber: string): Promise<DatabaseUser | null> {
     const sql = `
-      SELECT id, email, first_name as firstName, last_name as lastName, 
-             role, account_number as accountNumber, balance, is_active as isActive,
-             two_factor_enabled as twoFactorEnabled, failed_login_attempts as failedLoginAttempts,
-             locked_until as lockedUntil, last_login as lastLogin,
-             created_at as createdAt, updated_at as updatedAt
-      FROM users WHERE account_number = ?
+      SELECT id, email, first_name as "firstName", last_name as "lastName", 
+             role, account_number as "accountNumber", balance, is_active as "isActive",
+             two_factor_enabled as "twoFactorEnabled", failed_login_attempts as "failedLoginAttempts",
+             locked_until as "lockedUntil", last_login as "lastLogin",
+             created_at as "createdAt", updated_at as "updatedAt"
+      FROM users WHERE account_number = $1
     `
 
     return await db.queryOne<DatabaseUser>(sql, [accountNumber])
@@ -106,11 +107,11 @@ export class UserRepository {
   // Get all customers
   static async getAllCustomers(): Promise<DatabaseUser[]> {
     const sql = `
-      SELECT id, email, first_name as firstName, last_name as lastName, 
-             role, account_number as accountNumber, balance, is_active as isActive,
-             two_factor_enabled as twoFactorEnabled, failed_login_attempts as failedLoginAttempts,
-             locked_until as lockedUntil, last_login as lastLogin,
-             created_at as createdAt, updated_at as updatedAt
+      SELECT id, email, first_name as "firstName", last_name as "lastName", 
+             role, account_number as "accountNumber", balance, is_active as "isActive",
+             two_factor_enabled as "twoFactorEnabled", failed_login_attempts as "failedLoginAttempts",
+             locked_until as "lockedUntil", last_login as "lastLogin",
+             created_at as "createdAt", updated_at as "updatedAt"
       FROM users WHERE role = 'customer'
       ORDER BY created_at DESC
     `
@@ -120,49 +121,49 @@ export class UserRepository {
 
   // Update user
   static async update(id: string, data: UpdateUserData): Promise<boolean> {
-    const fields: string[] = []
+    const updates: string[] = []
     const values: any[] = []
+    let paramIndex = 1
 
     if (data.firstName !== undefined) {
-      fields.push("first_name = ?")
+      updates.push(`first_name = $${paramIndex++}`)
       values.push(data.firstName)
     }
     if (data.lastName !== undefined) {
-      fields.push("last_name = ?")
+      updates.push(`last_name = $${paramIndex++}`)
       values.push(data.lastName)
     }
     if (data.email !== undefined) {
-      fields.push("email = ?")
+      updates.push(`email = $${paramIndex++}`)
       values.push(data.email)
     }
     if (data.isActive !== undefined) {
-      fields.push("is_active = ?")
+      updates.push(`is_active = $${paramIndex++}`)
       values.push(data.isActive)
     }
     if (data.balance !== undefined) {
-      fields.push("balance = ?")
+      updates.push(`balance = $${paramIndex++}`)
       values.push(data.balance)
     }
 
-    if (fields.length === 0) {
+    if (updates.length === 0) {
       return false
     }
 
-    fields.push("updated_at = CURRENT_TIMESTAMP")
     values.push(id)
 
-    const sql = `UPDATE users SET ${fields.join(", ")} WHERE id = ?`
+    const sql = `UPDATE users SET ${updates.join(", ")} WHERE id = $${paramIndex}`
 
     const result = await db.query(sql, values)
-    return Array.isArray(result) && result.length > 0
+    return result.length > 0
   }
 
   // Update login attempts
   static async updateLoginAttempts(id: string, attempts: number, lockedUntil?: Date): Promise<void> {
     const sql = `
       UPDATE users 
-      SET failed_login_attempts = ?, locked_until = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      SET failed_login_attempts = $1, locked_until = $2
+      WHERE id = $3
     `
 
     await db.query(sql, [attempts, lockedUntil || null, id])
@@ -172,9 +173,8 @@ export class UserRepository {
   static async updateLastLogin(id: string): Promise<void> {
     const sql = `
       UPDATE users 
-      SET last_login = CURRENT_TIMESTAMP, failed_login_attempts = 0, locked_until = NULL,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      SET last_login = CURRENT_TIMESTAMP, failed_login_attempts = 0, locked_until = NULL
+      WHERE id = $1
     `
 
     await db.query(sql, [id])
@@ -184,12 +184,12 @@ export class UserRepository {
   static async updateBalance(id: string, newBalance: number): Promise<boolean> {
     const sql = `
       UPDATE users 
-      SET balance = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      SET balance = $1
+      WHERE id = $2
     `
 
     const result = await db.query(sql, [newBalance, id])
-    return Array.isArray(result) && result.length > 0
+    return result.length > 0
   }
 
   // Log login attempt
@@ -202,7 +202,7 @@ export class UserRepository {
   ): Promise<void> {
     const sql = `
       INSERT INTO login_history (id, user_id, ip_address, user_agent, success, failure_reason)
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES ($1, $2, $3, $4, $5, $6)
     `
 
     await db.query(sql, [uuidv4(), userId, ipAddress || null, userAgent || null, success, failureReason || null])
@@ -211,12 +211,12 @@ export class UserRepository {
   // Get login history
   static async getLoginHistory(userId: string, limit = 10): Promise<LoginHistory[]> {
     const sql = `
-      SELECT id, user_id as userId, ip_address as ipAddress, user_agent as userAgent,
-             success, failure_reason as failureReason, created_at as createdAt
+      SELECT id, user_id as "userId", ip_address as "ipAddress", user_agent as "userAgent",
+             success, failure_reason as "failureReason", created_at as "createdAt"
       FROM login_history 
-      WHERE user_id = ?
+      WHERE user_id = $1
       ORDER BY created_at DESC
-      LIMIT ?
+      LIMIT $2
     `
 
     return await db.query<LoginHistory>(sql, [userId, limit])
@@ -229,11 +229,11 @@ export class UserRepository {
 
   // Check if email exists
   static async emailExists(email: string, excludeId?: string): Promise<boolean> {
-    let sql = "SELECT COUNT(*) as count FROM users WHERE email = ?"
+    let sql = "SELECT COUNT(*) as count FROM users WHERE email = $1"
     const params = [email]
 
     if (excludeId) {
-      sql += " AND id != ?"
+      sql += " AND id != $2"
       params.push(excludeId)
     }
 

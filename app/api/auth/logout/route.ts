@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { SecureDatabase } from "@/lib/secure-database"
+import { AuthService } from "@/lib/services/auth-service"
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,14 +10,13 @@ export async function POST(request: NextRequest) {
     }
 
     const token = authHeader.substring(7)
-    const user = SecureDatabase.validateSession(token)
+    const success = await AuthService.logout(token)
 
-    if (user && user.sessionId) {
-      SecureDatabase.logoutUser(user.sessionId)
-      console.log(`User logged out: ${user.email}`)
+    if (!success) {
+      return NextResponse.json({ error: "Failed to logout" }, { status: 500 })
     }
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ message: "Logged out successfully" })
   } catch (error) {
     console.error("Logout error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

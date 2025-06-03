@@ -1,4 +1,4 @@
-// Transaction repository for database operations
+// Transaction repository for PostgreSQL database operations
 import { db } from "../connection"
 import type { Transaction, CreateTransactionData } from "../models"
 import { v4 as uuidv4 } from "uuid"
@@ -13,7 +13,8 @@ export class TransactionRepository {
         id, from_account_number, to_account_number, amount, currency, exchange_rate,
         amount_in_zar, reference, recipient_name, recipient_bank, transaction_type,
         fees, ip_address, user_agent, risk_score
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      RETURNING id
     `
 
     // Calculate risk score
@@ -48,13 +49,13 @@ export class TransactionRepository {
   // Find transaction by ID
   static async findById(id: string): Promise<Transaction | null> {
     const sql = `
-      SELECT id, from_account_number as fromAccountNumber, to_account_number as toAccountNumber,
-             amount, currency, exchange_rate as exchangeRate, amount_in_zar as amountInZar,
-             reference, recipient_name as recipientName, recipient_bank as recipientBank,
-             status, transaction_type as transactionType, fees, risk_score as riskScore,
-             ip_address as ipAddress, user_agent as userAgent,
-             created_at as createdAt, completed_at as completedAt, updated_at as updatedAt
-      FROM transactions WHERE id = ?
+      SELECT id, from_account_number as "fromAccountNumber", to_account_number as "toAccountNumber",
+             amount, currency, exchange_rate as "exchangeRate", amount_in_zar as "amountInZar",
+             reference, recipient_name as "recipientName", recipient_bank as "recipientBank",
+             status, transaction_type as "transactionType", fees, risk_score as "riskScore",
+             ip_address as "ipAddress", user_agent as "userAgent",
+             created_at as "createdAt", completed_at as "completedAt", updated_at as "updatedAt"
+      FROM transactions WHERE id = $1
     `
 
     return await db.queryOne<Transaction>(sql, [id])
@@ -63,33 +64,33 @@ export class TransactionRepository {
   // Get transactions for a user account
   static async getByAccountNumber(accountNumber: string, limit = 50): Promise<Transaction[]> {
     const sql = `
-      SELECT id, from_account_number as fromAccountNumber, to_account_number as toAccountNumber,
-             amount, currency, exchange_rate as exchangeRate, amount_in_zar as amountInZar,
-             reference, recipient_name as recipientName, recipient_bank as recipientBank,
-             status, transaction_type as transactionType, fees, risk_score as riskScore,
-             ip_address as ipAddress, user_agent as userAgent,
-             created_at as createdAt, completed_at as completedAt, updated_at as updatedAt
+      SELECT id, from_account_number as "fromAccountNumber", to_account_number as "toAccountNumber",
+             amount, currency, exchange_rate as "exchangeRate", amount_in_zar as "amountInZar",
+             reference, recipient_name as "recipientName", recipient_bank as "recipientBank",
+             status, transaction_type as "transactionType", fees, risk_score as "riskScore",
+             ip_address as "ipAddress", user_agent as "userAgent",
+             created_at as "createdAt", completed_at as "completedAt", updated_at as "updatedAt"
       FROM transactions 
-      WHERE from_account_number = ? OR to_account_number = ?
+      WHERE from_account_number = $1 OR to_account_number = $1
       ORDER BY created_at DESC
-      LIMIT ?
+      LIMIT $2
     `
 
-    return await db.query<Transaction>(sql, [accountNumber, accountNumber, limit])
+    return await db.query<Transaction>(sql, [accountNumber, limit])
   }
 
   // Get all transactions (admin)
   static async getAll(limit = 100): Promise<Transaction[]> {
     const sql = `
-      SELECT id, from_account_number as fromAccountNumber, to_account_number as toAccountNumber,
-             amount, currency, exchange_rate as exchangeRate, amount_in_zar as amountInZar,
-             reference, recipient_name as recipientName, recipient_bank as recipientBank,
-             status, transaction_type as transactionType, fees, risk_score as riskScore,
-             ip_address as ipAddress, user_agent as userAgent,
-             created_at as createdAt, completed_at as completedAt, updated_at as updatedAt
+      SELECT id, from_account_number as "fromAccountNumber", to_account_number as "toAccountNumber",
+             amount, currency, exchange_rate as "exchangeRate", amount_in_zar as "amountInZar",
+             reference, recipient_name as "recipientName", recipient_bank as "recipientBank",
+             status, transaction_type as "transactionType", fees, risk_score as "riskScore",
+             ip_address as "ipAddress", user_agent as "userAgent",
+             created_at as "createdAt", completed_at as "completedAt", updated_at as "updatedAt"
       FROM transactions 
       ORDER BY created_at DESC
-      LIMIT ?
+      LIMIT $1
     `
 
     return await db.query<Transaction>(sql, [limit])
@@ -101,12 +102,12 @@ export class TransactionRepository {
 
     const sql = `
       UPDATE transactions 
-      SET status = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      SET status = $1, completed_at = $2
+      WHERE id = $3
     `
 
     const result = await db.query(sql, [status, completedAt, id])
-    return Array.isArray(result) && result.length > 0
+    return result.length > 0
   }
 
   // Get transaction statistics
@@ -120,12 +121,12 @@ export class TransactionRepository {
     const totalSql = "SELECT COUNT(*) as count FROM transactions"
     const completedSql = "SELECT COUNT(*) as count FROM transactions WHERE status = 'completed'"
     const pendingSql = "SELECT COUNT(*) as count FROM transactions WHERE status = 'pending'"
-    const volumeSql = "SELECT SUM(amount_in_zar) as volume FROM transactions WHERE status = 'completed'"
+    const volumeSql = "SELECT COALESCE(SUM(amount_in_zar), 0) as volume FROM transactions WHERE status = 'completed'"
     const monthlyVolumeSql = `
-      SELECT SUM(amount_in_zar) as volume 
+      SELECT COALESCE(SUM(amount_in_zar), 0) as volume 
       FROM transactions 
       WHERE status = 'completed' 
-      AND created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)
+      AND created_at >= NOW() - INTERVAL '1 month'
     `
 
     const [total, completed, pending, volume, monthlyVolume] = await Promise.all([
@@ -137,11 +138,11 @@ export class TransactionRepository {
     ])
 
     return {
-      totalTransactions: total?.count || 0,
-      completedTransactions: completed?.count || 0,
-      pendingTransactions: pending?.count || 0,
-      totalVolume: volume?.volume || 0,
-      monthlyVolume: monthlyVolume?.volume || 0,
+      totalTransactions: Number.parseInt(total?.count.toString() || "0"),
+      completedTransactions: Number.parseInt(completed?.count.toString() || "0"),
+      pendingTransactions: Number.parseInt(pending?.count.toString() || "0"),
+      totalVolume: Number.parseFloat(volume?.volume?.toString() || "0"),
+      monthlyVolume: Number.parseFloat(monthlyVolume?.volume?.toString() || "0"),
     }
   }
 
@@ -166,21 +167,21 @@ export class TransactionRepository {
   // Get transactions by date range
   static async getByDateRange(startDate: Date, endDate: Date, accountNumber?: string): Promise<Transaction[]> {
     let sql = `
-      SELECT id, from_account_number as fromAccountNumber, to_account_number as toAccountNumber,
-             amount, currency, exchange_rate as exchangeRate, amount_in_zar as amountInZar,
-             reference, recipient_name as recipientName, recipient_bank as recipientBank,
-             status, transaction_type as transactionType, fees, risk_score as riskScore,
-             ip_address as ipAddress, user_agent as userAgent,
-             created_at as createdAt, completed_at as completedAt, updated_at as updatedAt
+      SELECT id, from_account_number as "fromAccountNumber", to_account_number as "toAccountNumber",
+             amount, currency, exchange_rate as "exchangeRate", amount_in_zar as "amountInZar",
+             reference, recipient_name as "recipientName", recipient_bank as "recipientBank",
+             status, transaction_type as "transactionType", fees, risk_score as "riskScore",
+             ip_address as "ipAddress", user_agent as "userAgent",
+             created_at as "createdAt", completed_at as "completedAt", updated_at as "updatedAt"
       FROM transactions 
-      WHERE created_at BETWEEN ? AND ?
+      WHERE created_at BETWEEN $1 AND $2
     `
 
     const params = [startDate, endDate]
 
     if (accountNumber) {
-      sql += " AND (from_account_number = ? OR to_account_number = ?)"
-      params.push(accountNumber, accountNumber)
+      sql += " AND (from_account_number = $3 OR to_account_number = $3)"
+      params.push(accountNumber)
     }
 
     sql += " ORDER BY created_at DESC"

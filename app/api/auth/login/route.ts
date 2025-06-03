@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Login attempt for: ${email} from IP: ${clientIP}`)
 
-    // Authenticate user using the new service
+    // Authenticate user using the new PostgreSQL service
     const result = await AuthService.authenticate(email, password, clientIP, userAgent)
 
     if (!result.success) {

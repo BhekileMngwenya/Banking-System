@@ -1,5 +1,5 @@
 // Database connection and configuration
-import mysql from "mysql2/promise"
+import { Pool, type PoolClient } from "pg"
 
 interface DatabaseConfig {
   host: string
@@ -7,15 +7,15 @@ interface DatabaseConfig {
   user: string
   password: string
   database: string
-  connectionLimit: number
-  acquireTimeout: number
-  timeout: number
-  reconnect: boolean
+  ssl?: boolean | { rejectUnauthorized: boolean }
+  max: number // connection pool max size
+  idleTimeoutMillis: number
+  connectionTimeoutMillis: number
 }
 
 class DatabaseConnection {
   private static instance: DatabaseConnection
-  private pool: mysql.Pool | null = null
+  private pool: Pool | null = null
 
   private constructor() {}
 
@@ -30,29 +30,40 @@ class DatabaseConnection {
     try {
       const config: DatabaseConfig = {
         host: process.env.DB_HOST || "localhost",
-        port: Number.parseInt(process.env.DB_PORT || "3306"),
-        user: process.env.DB_USER || "root",
+        port: Number.parseInt(process.env.DB_PORT || "5432"),
+        user: process.env.DB_USER || "postgres",
         password: process.env.DB_PASSWORD || "",
         database: process.env.DB_NAME || "banking_portal",
-        connectionLimit: 10,
-        acquireTimeout: 60000,
-        timeout: 60000,
-        reconnect: true,
+        max: 10, // max number of clients in the pool
+        idleTimeoutMillis: 30000, // how long a client is allowed to remain idle before being closed
+        connectionTimeoutMillis: 10000, // how long to wait for a connection
       }
 
-      this.pool = mysql.createPool(config)
+      // Add SSL configuration if needed (e.g., for production)
+      if (process.env.NODE_ENV === "production" && process.env.DB_SSL === "true") {
+        config.ssl = {
+          rejectUnauthorized: false, // Set to true in production with proper certificates
+        }
+      }
+
+      this.pool = new Pool(config)
 
       // Test connection
-      const connection = await this.pool.getConnection()
-      console.log("✅ Database connected successfully")
-      connection.release()
+      const client = await this.pool.connect()
+      console.log("✅ PostgreSQL database connected successfully")
+      client.release()
+
+      // Handle pool errors
+      this.pool.on("error", (err) => {
+        console.error("Unexpected error on idle PostgreSQL client", err)
+      })
     } catch (error) {
       console.error("❌ Database connection failed:", error)
       throw error
     }
   }
 
-  getPool(): mysql.Pool {
+  getPool(): Pool {
     if (!this.pool) {
       throw new Error("Database not initialized. Call initialize() first.")
     }
@@ -65,8 +76,8 @@ class DatabaseConnection {
     }
 
     try {
-      const [rows] = await this.pool.execute(sql, params)
-      return rows as T[]
+      const result = await this.pool.query(sql, params)
+      return result.rows as T[]
     } catch (error) {
       console.error("Database query error:", error)
       throw error
@@ -78,23 +89,23 @@ class DatabaseConnection {
     return results.length > 0 ? results[0] : null
   }
 
-  async transaction<T>(callback: (connection: mysql.PoolConnection) => Promise<T>): Promise<T> {
+  async transaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
     if (!this.pool) {
       throw new Error("Database not initialized")
     }
 
-    const connection = await this.pool.getConnection()
+    const client = await this.pool.connect()
 
     try {
-      await connection.beginTransaction()
-      const result = await callback(connection)
-      await connection.commit()
+      await client.query("BEGIN")
+      const result = await callback(client)
+      await client.query("COMMIT")
       return result
     } catch (error) {
-      await connection.rollback()
+      await client.query("ROLLBACK")
       throw error
     } finally {
-      connection.release()
+      client.release()
     }
   }
 
