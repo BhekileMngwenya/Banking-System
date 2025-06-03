@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { SecureDatabase } from "@/lib/secure-database"
+import { AuthService } from "@/lib/services/auth-service"
 import { checkRateLimit } from "@/lib/security"
 
 export async function POST(request: NextRequest) {
@@ -23,8 +23,8 @@ export async function POST(request: NextRequest) {
 
     console.log(`Login attempt for: ${email} from IP: ${clientIP}`)
 
-    // Authenticate user with security logging
-    const result = await SecureDatabase.authenticateUser(email, password, clientIP, userAgent)
+    // Authenticate user using the new service
+    const result = await AuthService.authenticate(email, password, clientIP, userAgent)
 
     if (!result.success) {
       console.log(`Failed login attempt for: ${email} - ${result.error}`)
@@ -33,12 +33,9 @@ export async function POST(request: NextRequest) {
 
     console.log(`Successful login for: ${email}`)
 
-    // Return user data without sensitive information
-    const { passwordHash, passwordSalt, sessionId, loginHistory, ...safeUser } = result.user!
-
     return NextResponse.json({
       token: result.token,
-      user: safeUser,
+      user: result.user,
     })
   } catch (error) {
     console.error("Login API error:", error)

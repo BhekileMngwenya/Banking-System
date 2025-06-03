@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { SecureDatabase } from "@/lib/secure-database"
+import { AuthService } from "@/lib/services/auth-service"
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     }
 
     const token = authHeader.substring(7)
-    const user = SecureDatabase.validateSession(token)
+    const user = await AuthService.validateSession(token)
 
     if (!user) {
       return NextResponse.json({ error: "Invalid or expired session" }, { status: 401 })
@@ -18,10 +18,7 @@ export async function GET(request: NextRequest) {
 
     console.log(`Returning user data for ${user.email}, balance: R${user.balance}`)
 
-    // Return user data without sensitive information
-    const { passwordHash, passwordSalt, sessionId, loginHistory, ...safeUser } = user
-
-    return NextResponse.json({ user: safeUser })
+    return NextResponse.json({ user })
   } catch (error) {
     console.error("Token verification error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
